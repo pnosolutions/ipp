@@ -1,0 +1,14 @@
+packages:
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+
+catalogMode: strict
+
+catalog:
+  "@ianvs/prettier-plugin-sort-imports": ^4.7.1
+  prettier: ^3.8.3
+  tsdown: ^0.22.0
+  typescript: ^6.0.3
+  vitest: ^4.1.6

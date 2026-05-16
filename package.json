@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@ianvs/prettier-plugin-sort-imports": "catalog:",
+    "@vitest/eslint-plugin": "^1.6.17",
+    "eslint": "^10.3.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-unused-imports": "^4.4.1",
+    "prettier": "catalog:",
+    "typescript-eslint": "^8.59.3"
+  }
+}

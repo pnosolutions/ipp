@@ -1,0 +1,47 @@
+{
+  "name": "@pnosolutions/ipp-client",
+  "version": "0.1.0",
+  "description": "Internet Printing Protocol (IPP) client",
+  "keywords": [
+    "ipp",
+    "printing",
+    "pwg",
+    "ipp-everywhere"
+  ],
+  "author": {
+    "name": "Nick Popov",
+    "email": "nick@pno.solutions"
+  },
+  "license": "ISC",
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.1.1",
+      "onFail": "download"
+    }
+  },
+  "dependencies": {
+    "@pnosolutions/ipp-core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.js",
+      "./package.json": "./package.json"
+    }
+  }
+}
