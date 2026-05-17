@@ -1,5 +1,5 @@
 {
-  "name": "@pnosolutions/ipp-client",
+  "name": "@pnosolutions/ipp",
   "version": "0.1.0",
   "description": "Internet Printing Protocol (IPP) client",
   "keywords": [
@@ -40,7 +40,10 @@
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/index.js",
+      ".": {
+        "default": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      },
       "./package.json": "./package.json"
     }
   }
