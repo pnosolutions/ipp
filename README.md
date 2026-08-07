@@ -4,12 +4,12 @@ A TypeScript implementation of the [Internet Printing Protocol (IPP)](https://da
 
 This repository is a small monorepo with two packages:
 
-| Package                                         | Description                                                                                       |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| [`@pnosolutions/ipp-core`](./packages/core)     | Zero-dependency IPP message encoder/decoder, type definitions, and tag/operation constants.       |
-| [`@pnosolutions/ipp-client`](./packages/client) | High-level client for talking to IPP printers — query status, submit print jobs, parse responses. |
+| Package                                     | Description                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [`@pnosolutions/ipp-core`](./packages/core) | Zero-dependency IPP message encoder/decoder, type definitions, and tag/operation constants.       |
+| [`@pnosolutions/ipp`](./packages/client)    | High-level client for talking to IPP printers — query status, submit print jobs, parse responses. |
 
-> **Status:** early `0.1.0`. The API surface is intentionally small and may shift.
+> **Status:** early `0.2.0`. The API surface is intentionally small and may shift.
 
 ## Features
 
@@ -24,11 +24,11 @@ This repository is a small monorepo with two packages:
 ## Installation
 
 ```sh
-npm install @pnosolutions/ipp-client
+npm install @pnosolutions/ipp
 # or
-pnpm add @pnosolutions/ipp-client
+pnpm add @pnosolutions/ipp
 # or
-yarn add @pnosolutions/ipp-client
+yarn add @pnosolutions/ipp
 ```
 
 `@pnosolutions/ipp-core` is installed automatically as a dependency of the client. Install it directly only if you want to work with raw IPP messages.
@@ -37,7 +37,7 @@ yarn add @pnosolutions/ipp-client
 
 ```ts
 import { readFile } from 'node:fs/promises';
-import { Printer } from '@pnosolutions/ipp-client';
+import { Printer } from '@pnosolutions/ipp';
 
 const printer = new Printer('ipp://printer.local:631/ipp/print');
 
@@ -153,7 +153,7 @@ Members you leave out are omitted from the request, so the printer keeps its own
 Operation-level failures (any IPP status code `>= 0x0400`) throw `IppOperationError`:
 
 ```ts
-import { IppOperationError } from '@pnosolutions/ipp-client';
+import { IppOperationError } from '@pnosolutions/ipp';
 
 try {
   await printer.print(data);
@@ -196,7 +196,7 @@ new IppClient({ uri, validateResponseRequestId: false });
 For operations not yet wrapped by `Printer`, drop down to `IppClient` and the core encoding API.
 
 ```ts
-import { IppClient } from '@pnosolutions/ipp-client';
+import { IppClient } from '@pnosolutions/ipp';
 import { IppOperation, IppTag } from '@pnosolutions/ipp-core';
 
 const client = new IppClient({
