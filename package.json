@@ -1,5 +1,11 @@
 {
   "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test run",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "lint": "eslint ."
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@ianvs/prettier-plugin-sort-imports": "catalog:",

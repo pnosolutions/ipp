@@ -6,12 +6,8 @@ import {
   getAttribute,
   getAttributes,
 } from './encoding';
-import {
-  IppOperation,
-  IppResolutionUnit,
-  IppTag,
-  IppVersion,
-} from './types';
+import { IppDecodeError } from './errors';
+import { IppOperation, IppResolutionUnit, IppTag, IppVersion } from './types';
 
 import type { IppRequest, IppResolution, IppResponse } from './types';
 
@@ -303,9 +299,9 @@ describe('encodeIppRequest', () => {
     const nameLen = view.getUint16(1, false);
     const valLenOffset = 3 + nameLen;
     expect(view.getUint16(valLenOffset, false)).toBe(9);
-    expect(Array.from(attr.subarray(valLenOffset + 2, valLenOffset + 11))).toEqual(
-      Array.from(raw),
-    );
+    expect(
+      Array.from(attr.subarray(valLenOffset + 2, valLenOffset + 11)),
+    ).toEqual(Array.from(raw));
   });
 
   it('emits zero-length value for NoValue / Unknown / Unsupported tags', () => {
@@ -704,6 +700,318 @@ describe('decodeIppResponse', () => {
     expect(res.groups[0].attributes[0].value).toEqual({
       'x-image-position': ['left', 'right'],
     });
+  });
+});
+
+describe('encoding collections', () => {
+  /** Encode an attribute, then read it back through the decoder. */
+  function roundTrip(
+    attribute: IppRequest['groups'][number]['attributes'][number],
+  ) {
+    const encoded = encodeIppRequest({
+      operation: IppOperation.PrintJob,
+      requestId: 1,
+      groups: [{ tag: IppTag.JobAttributes, attributes: [attribute] }],
+    });
+    viewOf(encoded).setUint16(2, 0, false);
+    return decodeIppResponse(encoded).groups[0].attributes[0];
+  }
+
+  it('round-trips a flat collection', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'media-col',
+      value: {
+        'media-type': 'labels',
+        'media-source': 'main-roll',
+        'media-top-margin': 0,
+      },
+    });
+
+    expect(attr.name).toBe('media-col');
+    expect(attr.tag).toBe(IppTag.BegCollection);
+    expect(attr.value).toEqual({
+      'media-type': 'labels',
+      'media-source': 'main-roll',
+      'media-top-margin': 0,
+    });
+  });
+
+  it('round-trips a nested collection', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'media-col',
+      value: {
+        'media-size': { 'x-dimension': 5715, 'y-dimension': 3175 },
+        'media-source': 'main-roll',
+      },
+    });
+
+    expect(attr.value).toEqual({
+      'media-size': { 'x-dimension': 5715, 'y-dimension': 3175 },
+      'media-source': 'main-roll',
+    });
+  });
+
+  it('round-trips a multi-valued collection attribute', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'media-col-supported',
+      value: [{ 'media-type': 'labels' }, { 'media-type': 'photographic' }],
+    });
+
+    expect(attr.name).toBe('media-col-supported');
+    expect(attr.value).toEqual([
+      { 'media-type': 'labels' },
+      { 'media-type': 'photographic' },
+    ]);
+  });
+
+  it('round-trips a multi-valued member', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'sample-col',
+      value: { 'x-image-position': ['left', 'right'] },
+    });
+
+    expect(attr.value).toEqual({ 'x-image-position': ['left', 'right'] });
+  });
+
+  it('infers value tags from the JavaScript type', () => {
+    const encoded = encodeIppRequest({
+      operation: IppOperation.PrintJob,
+      requestId: 1,
+      groups: [
+        {
+          tag: IppTag.JobAttributes,
+          attributes: [
+            {
+              tag: IppTag.BegCollection,
+              name: 'c',
+              value: { n: 42, b: true, s: 'kw' },
+            },
+          ],
+        },
+      ],
+    });
+
+    // Walk the record run and collect the value tags after each memberAttrName.
+    const tags: number[] = [];
+    for (let i = 9; i < encoded.length - 1; ) {
+      const tag = encoded[i];
+      const view = viewOf(encoded.subarray(i));
+      const nameLen = view.getUint16(1, false);
+      const valLen = view.getUint16(3 + nameLen, false);
+      if (tag !== IppTag.MemberAttrName) tags.push(tag);
+      i += 1 + 2 + nameLen + 2 + valLen;
+    }
+
+    expect(tags).toEqual([
+      IppTag.BegCollection,
+      IppTag.Integer,
+      IppTag.Boolean,
+      IppTag.Keyword,
+      IppTag.EndCollection,
+    ]);
+  });
+
+  it('honours an explicit tag on a member value', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'c',
+      value: {
+        'a-uri': { tag: IppTag.Uri, value: 'ipp://printer.local/ipp/print' },
+        'a-count': { tag: IppTag.Enum, value: 3 },
+      },
+    });
+
+    expect(attr.value).toEqual({
+      'a-uri': 'ipp://printer.local/ipp/print',
+      'a-count': 3,
+    });
+  });
+
+  it('encodes an empty collection as begCollection + endCollection', () => {
+    const attr = roundTrip({
+      tag: IppTag.BegCollection,
+      name: 'empty-col',
+      value: {},
+    });
+
+    expect(attr.name).toBe('empty-col');
+    expect(attr.value).toEqual({});
+  });
+});
+
+describe('malformed input', () => {
+  function header(bytes = 8): Uint8Array {
+    const out = new Uint8Array(bytes);
+    const v = viewOf(out);
+    if (bytes >= 8) {
+      v.setUint8(0, 2);
+      v.setUint16(2, 0, false);
+      v.setUint32(4, 1, false);
+    }
+    return out;
+  }
+
+  it('throws IppDecodeError on an empty buffer', () => {
+    expect(() => decodeIppResponse(new Uint8Array(0))).toThrow(IppDecodeError);
+  });
+
+  it('throws IppDecodeError on a truncated header', () => {
+    expect(() => decodeIppResponse(new Uint8Array(5))).toThrow(
+      /Truncated IPP message/,
+    );
+  });
+
+  it('throws IppDecodeError on an attribute record cut short', () => {
+    // Group delimiter + tag + a name-length claiming more bytes than exist.
+    const body = new Uint8Array([
+      IppTag.PrinterAttributes,
+      IppTag.Keyword,
+      0,
+      40,
+    ]);
+    const data = concat([header(), body]);
+
+    let error: unknown;
+    try {
+      decodeIppResponse(data);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(IppDecodeError);
+    expect((error as IppDecodeError).offset).toBeGreaterThan(0);
+  });
+
+  it('does not throw on a zero-length integer value', () => {
+    const nameBytes = textEncoder.encode('copies');
+    const attr = new Uint8Array(1 + 2 + nameBytes.length + 2);
+    const view = viewOf(attr);
+    view.setUint8(0, IppTag.Integer);
+    view.setUint16(1, nameBytes.length, false);
+    attr.set(nameBytes, 3);
+    view.setUint16(3 + nameBytes.length, 0, false);
+
+    const data = concat([
+      header(),
+      new Uint8Array([IppTag.PrinterAttributes]),
+      attr,
+      new Uint8Array([IppTag.EndOfAttributes]),
+    ]);
+
+    const res = decodeIppResponse(data);
+    expect(res.groups[0]?.attributes[0]?.value).toBeInstanceOf(Uint8Array);
+  });
+
+  it('does not throw on a short resolution value', () => {
+    const nameBytes = textEncoder.encode('printer-resolution-default');
+    const attr = new Uint8Array(1 + 2 + nameBytes.length + 2 + 4);
+    const view = viewOf(attr);
+    view.setUint8(0, IppTag.Resolution);
+    view.setUint16(1, nameBytes.length, false);
+    attr.set(nameBytes, 3);
+    view.setUint16(3 + nameBytes.length, 4, false);
+
+    const data = concat([
+      header(),
+      new Uint8Array([IppTag.PrinterAttributes]),
+      attr,
+      new Uint8Array([IppTag.EndOfAttributes]),
+    ]);
+
+    expect(() => decodeIppResponse(data)).not.toThrow();
+  });
+});
+
+describe('textWithLanguage / nameWithLanguage', () => {
+  function withLanguage(language: string, text: string): Uint8Array {
+    const lang = textEncoder.encode(language);
+    const txt = textEncoder.encode(text);
+    const out = new Uint8Array(2 + lang.length + 2 + txt.length);
+    const view = viewOf(out);
+    view.setUint16(0, lang.length, false);
+    out.set(lang, 2);
+    view.setUint16(2 + lang.length, txt.length, false);
+    out.set(txt, 4 + lang.length);
+    return out;
+  }
+
+  function record(tag: number, name: string, value: Uint8Array): Uint8Array {
+    const nameBytes = textEncoder.encode(name);
+    const out = new Uint8Array(1 + 2 + nameBytes.length + 2 + value.length);
+    const view = viewOf(out);
+    view.setUint8(0, tag);
+    view.setUint16(1, nameBytes.length, false);
+    out.set(nameBytes, 3);
+    view.setUint16(3 + nameBytes.length, value.length, false);
+    out.set(value, 3 + nameBytes.length + 2);
+    return out;
+  }
+
+  function response(body: Uint8Array): Uint8Array {
+    const h = new Uint8Array(8);
+    const v = viewOf(h);
+    v.setUint8(0, 2);
+    v.setUint32(4, 1, false);
+    return concat([h, body]);
+  }
+
+  it('decodes the language tag and text separately', () => {
+    const body = concat([
+      new Uint8Array([IppTag.PrinterAttributes]),
+      record(
+        IppTag.NameWithLanguage,
+        'printer-name',
+        withLanguage('en-us', 'Front Desk Label Printer'),
+      ),
+      new Uint8Array([IppTag.EndOfAttributes]),
+    ]);
+
+    expect(decodeIppResponse(response(body)).groups[0]?.attributes[0]).toEqual({
+      tag: IppTag.NameWithLanguage,
+      name: 'printer-name',
+      value: { language: 'en-us', value: 'Front Desk Label Printer' },
+    });
+  });
+
+  it('round-trips through encode and decode', () => {
+    const encoded = encodeIppRequest({
+      operation: IppOperation.PrintJob,
+      requestId: 1,
+      groups: [
+        {
+          tag: IppTag.OperationAttributes,
+          attributes: [
+            {
+              tag: IppTag.TextWithLanguage,
+              name: 'job-name',
+              value: { language: 'de', value: 'Rechnung Ü' },
+            },
+          ],
+        },
+      ],
+    });
+
+    viewOf(encoded).setUint16(2, 0, false);
+    expect(decodeIppResponse(encoded).groups[0]?.attributes[0]?.value).toEqual({
+      language: 'de',
+      value: 'Rechnung Ü',
+    });
+  });
+
+  it('falls back to a plain string for a malformed record', () => {
+    const body = concat([
+      new Uint8Array([IppTag.PrinterAttributes]),
+      record(IppTag.TextWithLanguage, 'x', textEncoder.encode('ab')),
+      new Uint8Array([IppTag.EndOfAttributes]),
+    ]);
+
+    expect(
+      decodeIppResponse(response(body)).groups[0]?.attributes[0]?.value,
+    ).toBe('ab');
   });
 });
 

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    // Test assertions index into decoded structures constantly; requiring a
+    // guard on every `groups[0].attributes[0]` buys nothing here.
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["*.ts", "packages/*/*.ts", "packages/*/src/**/*.ts"]
+}

@@ -1,0 +1,5 @@
+dist
+
+# Written by pnpm itself (lockfile, catalog entries).
+pnpm-lock.yaml
+pnpm-workspace.yaml

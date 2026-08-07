@@ -33,14 +33,18 @@ export class CollectionParser {
 
   private readToken(): string {
     const start = this.pos;
-    while (this.pos < this.src.length && !/[\s={}]/.test(this.src[this.pos])) {
+    while (this.pos < this.src.length) {
+      const char = this.src[this.pos];
+      if (char === undefined || /[\s={}]/.test(char)) break;
       this.pos++;
     }
     return this.src.slice(start, this.pos);
   }
 
   private skipWs(): void {
-    while (this.pos < this.src.length && /\s/.test(this.src[this.pos])) {
+    while (this.pos < this.src.length) {
+      const char = this.src[this.pos];
+      if (char === undefined || !/\s/.test(char)) break;
       this.pos++;
     }
   }

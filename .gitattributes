@@ -1,0 +1,5 @@
+# Normalize line endings to LF in the repository. Working trees keep whatever
+# the platform prefers; Prettier is configured with endOfLine: 'auto' to match.
+* text=auto
+
+pnpm-lock.yaml -diff

@@ -1,4 +1,8 @@
 {
+  // Solution file: builds the packages only. Root-level configs (prettier,
+  // tsdown, examples) are typechecked by tsconfig.test.json - building them
+  // here would emit a prettier.config.js that shadows prettier.config.ts.
   "extends": "./tsconfig.base.json",
-  "include": ["*.ts"]
+  "files": [],
+  "references": [{ "path": "./packages/core" }, { "path": "./packages/client" }]
 }

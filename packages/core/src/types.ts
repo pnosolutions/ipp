@@ -117,11 +117,32 @@ export type IppAttributeValue =
   | boolean
   | Uint8Array
   | IppResolution
+  | IppTextWithLanguage
+  | IppTypedValue
   | IppCollection
   | IppAttributeValue[];
 
 export interface IppCollection {
   [memberName: string]: IppAttributeValue;
+}
+
+/**
+ * A value carrying an explicit IPP value tag.
+ *
+ * Encoding a collection has to pick a value tag for each member, and the
+ * plain JavaScript value alone is not always enough to do that - a string
+ * could be a `keyword`, a `uri`, a `mimeMediaType` and so on. Wrap the member
+ * to say which:
+ *
+ * ```ts
+ * { 'media-size-name': { tag: IppTag.Keyword, value: 'na_index-4x6_4x6in' } }
+ * ```
+ *
+ * Encode-only: decoding never produces this shape.
+ */
+export interface IppTypedValue {
+  tag: number;
+  value: IppAttributeValue;
 }
 
 /** RFC 8011 §5.1.16 'resolution' value. */
@@ -138,6 +159,19 @@ export const IppResolutionUnit = {
   DotsPerInch: 3,
   DotsPerCentimeter: 4,
 } as const;
+
+/**
+ * RFC 8011 §5.1.2.2 'textWithLanguage' / §5.1.3.2 'nameWithLanguage' value.
+ *
+ * On the wire these are a compound value - a natural-language tag followed by
+ * the text - rather than a plain string.
+ */
+export interface IppTextWithLanguage {
+  /** Natural language tag, e.g. 'en-us'. */
+  language: string;
+  /** The text or name itself. */
+  value: string;
+}
 
 export interface IppAttributeGroup {
   tag: number;

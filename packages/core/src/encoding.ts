@@ -1,5 +1,6 @@
 /// Inspired by: https://github.com/stacksjs/ts-printers/blob/45b7d4e6b4292a1a455178ec305610e9feae1573/src/ipp/encoding.ts
 
+import { IppDecodeError } from './errors';
 import { IppTag, IppVersion } from './types';
 import { concat, viewOf } from './utils';
 
@@ -11,6 +12,8 @@ import type {
   IppRequest,
   IppResolution,
   IppResponse,
+  IppTextWithLanguage,
+  IppTypedValue,
 } from './types';
 
 const textEncoder = new TextEncoder();
@@ -61,33 +64,40 @@ export function encodeIppRequest(request: IppRequest): Uint8Array<ArrayBuffer> {
  * Encode a single IPP attribute
  */
 function encodeAttribute(attr: IppAttribute): Uint8Array {
-  if (Array.isArray(attr.value)) {
-    // Multi-valued attribute: first value has the name, subsequent values have empty name
-    const chunks: Uint8Array[] = [];
-    for (let i = 0; i < attr.value.length; i++) {
-      const singleAttr: IppAttribute = {
-        tag: attr.tag,
-        name: i === 0 ? attr.name : '',
-        value: attr.value[i] as string | number | boolean | Uint8Array,
-      };
-      chunks.push(encodeSingleAttribute(singleAttr));
-    }
-    return concat(chunks);
+  // Multi-valued attribute: first value has the name, subsequent values have empty name
+  const values = Array.isArray(attr.value) ? attr.value : [attr.value];
+
+  if (attr.tag === IppTag.BegCollection) {
+    return concat(
+      values.map((value, i) =>
+        encodeCollection(i === 0 ? attr.name : '', value),
+      ),
+    );
   }
 
-  return encodeSingleAttribute(attr);
+  return concat(
+    values.map((value, i) =>
+      encodeRecord(
+        attr.tag,
+        i === 0 ? attr.name : '',
+        encodeValue(attr.tag, value),
+      ),
+    ),
+  );
 }
 
-function encodeSingleAttribute(attr: IppAttribute): Uint8Array {
-  const nameBytes = textEncoder.encode(attr.name);
-  const valueBytes = encodeValue(attr.tag, attr.value);
-
-  // tag(1) + name-length(2) + name + value-length(2) + value
+/** tag(1) + name-length(2) + name + value-length(2) + value */
+function encodeRecord(
+  tag: number,
+  name: string,
+  valueBytes: Uint8Array,
+): Uint8Array {
+  const nameBytes = textEncoder.encode(name);
   const buf = new Uint8Array(1 + 2 + nameBytes.length + 2 + valueBytes.length);
   const view = viewOf(buf);
   let offset = 0;
 
-  view.setUint8(offset, attr.tag);
+  view.setUint8(offset, tag);
   offset += 1;
   view.setUint16(offset, nameBytes.length, false);
   offset += 2;
@@ -100,10 +110,122 @@ function encodeSingleAttribute(attr: IppAttribute): Uint8Array {
   return buf;
 }
 
+/**
+ * Encode one collection value (RFC 8011 §5.1.15) as the record run
+ *
+ *   begCollection[name] (memberAttrName value...)* endCollection
+ *
+ * Nested collections repeat the run with an empty name. `name` is empty for
+ * the second and later values of a multi-valued collection attribute.
+ */
+function encodeCollection(
+  name: string,
+  value: IppAttributeValue,
+): Uint8Array<ArrayBuffer> {
+  const empty = new Uint8Array(0);
+  const chunks: Uint8Array[] = [
+    encodeRecord(IppTag.BegCollection, name, empty),
+  ];
+
+  for (const [member, memberValue] of Object.entries(asCollection(value))) {
+    chunks.push(
+      encodeRecord(IppTag.MemberAttrName, '', textEncoder.encode(member)),
+      ...encodeMemberValues(memberValue),
+    );
+  }
+
+  chunks.push(encodeRecord(IppTag.EndCollection, '', empty));
+
+  return concat(chunks);
+}
+
+/**
+ * Encode the value records that follow a memberAttrName. A member may hold
+ * several values, in which case each gets its own record.
+ */
+function encodeMemberValues(value: IppAttributeValue): Uint8Array[] {
+  if (Array.isArray(value)) return value.flatMap(encodeMemberValues);
+
+  const { tag, value: unwrapped } = isTypedValue(value)
+    ? { tag: value.tag, value: value.value }
+    : { tag: inferValueTag(value), value };
+
+  if (tag === IppTag.BegCollection) {
+    return [encodeCollection('', unwrapped)];
+  }
+
+  return [encodeRecord(tag, '', encodeValue(tag, unwrapped))];
+}
+
+/**
+ * Pick a value tag for a collection member that was given as a bare
+ * JavaScript value. Wrap the member in an {@link IppTypedValue} to override -
+ * strings in particular are guessed as `keyword`, which is the common case for
+ * collection members but not the only one.
+ */
+function inferValueTag(value: IppAttributeValue): number {
+  if (typeof value === 'number') return IppTag.Integer;
+  if (typeof value === 'boolean') return IppTag.Boolean;
+  if (value instanceof Uint8Array) return IppTag.OctetString;
+  if (isResolution(value)) return IppTag.Resolution;
+  if (isTextWithLanguage(value)) return IppTag.TextWithLanguage;
+  if (typeof value === 'object' && value !== null) return IppTag.BegCollection;
+  return IppTag.Keyword;
+}
+
+function asCollection(value: IppAttributeValue): IppCollection {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    value instanceof Uint8Array
+  ) {
+    return {};
+  }
+  return value as IppCollection;
+}
+
+function isTypedValue(value: IppAttributeValue): value is IppTypedValue {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Uint8Array) &&
+    typeof (value as IppTypedValue).tag === 'number' &&
+    'value' in value
+  );
+}
+
+function isResolution(value: IppAttributeValue): value is IppResolution {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Uint8Array) &&
+    typeof (value as IppResolution).x === 'number' &&
+    typeof (value as IppResolution).y === 'number' &&
+    typeof (value as IppResolution).units === 'number'
+  );
+}
+
+function isTextWithLanguage(
+  value: IppAttributeValue,
+): value is IppTextWithLanguage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Uint8Array) &&
+    typeof (value as IppTextWithLanguage).language === 'string' &&
+    typeof (value as IppTextWithLanguage).value === 'string'
+  );
+}
+
 function encodeValue(tag: number, value: IppAttributeValue): Uint8Array {
   if (Array.isArray(value)) {
     // Should not reach here for multi-valued (handled above)
-    return encodeValue(tag, value[0]);
+    const [first] = value;
+    return first === undefined ? new Uint8Array(0) : encodeValue(tag, first);
   }
 
   switch (tag) {
@@ -128,14 +250,7 @@ function encodeValue(tag: number, value: IppAttributeValue): Uint8Array {
     case IppTag.Resolution: {
       if (value instanceof Uint8Array) return value;
       const buf = new Uint8Array(9);
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value) &&
-        typeof value.x === 'number' &&
-        typeof value.y === 'number' &&
-        typeof value.units === 'number'
-      ) {
+      if (isResolution(value)) {
         const view = viewOf(buf);
         view.setInt32(0, value.x, false);
         view.setInt32(4, value.y, false);
@@ -147,9 +262,33 @@ function encodeValue(tag: number, value: IppAttributeValue): Uint8Array {
       if (value instanceof Uint8Array) return value;
       return new Uint8Array(11);
     }
+    case IppTag.TextWithLanguage:
+    case IppTag.NameWithLanguage: {
+      if (value instanceof Uint8Array) return value;
+      // RFC 8011 §5.1.2.2: language-length(2) language text-length(2) text
+      const { language, text } = isTextWithLanguage(value)
+        ? { language: value.language, text: value.value }
+        : { language: '', text: String(value) };
+
+      const languageBytes = textEncoder.encode(language);
+      const textBytes = textEncoder.encode(text);
+      const buf = new Uint8Array(
+        2 + languageBytes.length + 2 + textBytes.length,
+      );
+      const view = viewOf(buf);
+      view.setUint16(0, languageBytes.length, false);
+      buf.set(languageBytes, 2);
+      view.setUint16(2 + languageBytes.length, textBytes.length, false);
+      buf.set(textBytes, 4 + languageBytes.length);
+      return buf;
+    }
+    // Out-of-band tags have no value. Neither do the collection delimiters -
+    // they carry their payload in the surrounding record run.
     case IppTag.NoValue:
     case IppTag.Unknown:
-    case IppTag.Unsupported: {
+    case IppTag.Unsupported:
+    case IppTag.BegCollection:
+    case IppTag.EndCollection: {
       return new Uint8Array(0);
     }
     default: {
@@ -164,21 +303,49 @@ interface DecodeCursor {
   pos: number;
 }
 
+/**
+ * Guard every read against the end of the buffer so a truncated or non-IPP
+ * response surfaces as an {@link IppDecodeError} instead of a bare
+ * `RangeError` from `DataView`.
+ */
+function needBytes(
+  data: Uint8Array,
+  cursor: DecodeCursor,
+  bytes: number,
+  what: string,
+): void {
+  if (cursor.pos + bytes > data.length) {
+    throw new IppDecodeError(
+      `Truncated IPP message: need ${bytes} byte(s) for ${what} at offset ` +
+        `${cursor.pos}, but only ${data.length - cursor.pos} remain`,
+      cursor.pos,
+    );
+  }
+}
+
 function readNameAndValue(
   data: Uint8Array,
   view: DataView,
   cursor: DecodeCursor,
 ): { name: string; nameLength: number; rawValue: Uint8Array } {
+  needBytes(data, cursor, 2, 'name-length');
   const nameLength = view.getUint16(cursor.pos, false);
   cursor.pos += 2;
+
+  needBytes(data, cursor, nameLength, 'name');
   const name = textDecoder.decode(
     data.subarray(cursor.pos, cursor.pos + nameLength),
   );
   cursor.pos += nameLength;
+
+  needBytes(data, cursor, 2, 'value-length');
   const valueLength = view.getUint16(cursor.pos, false);
   cursor.pos += 2;
+
+  needBytes(data, cursor, valueLength, 'value');
   const rawValue = data.subarray(cursor.pos, cursor.pos + valueLength);
   cursor.pos += valueLength;
+
   return { name, nameLength, rawValue };
 }
 
@@ -218,13 +385,11 @@ function parseCollection(
         ? parseCollection(data, view, cursor)
         : decodeValue(tag, rawValue);
 
-    if (nameLength === 0 && currentMember in collection) {
-      const existing = collection[currentMember];
-      if (Array.isArray(existing)) {
-        existing.push(value);
-      } else {
-        collection[currentMember] = [existing, value];
-      }
+    const existing = collection[currentMember];
+    if (nameLength === 0 && existing !== undefined) {
+      collection[currentMember] = Array.isArray(existing)
+        ? [...existing, value]
+        : [existing, value];
     } else {
       collection[currentMember] = value;
     }
@@ -239,6 +404,8 @@ function parseCollection(
 export function decodeIppResponse(data: Uint8Array): IppResponse {
   const view = viewOf(data);
   const cursor: DecodeCursor = { pos: 0 };
+
+  needBytes(data, cursor, 8, 'response header');
 
   // Version (2 bytes)
   const versionMajor = view.getUint8(cursor.pos);
@@ -283,14 +450,11 @@ export function decodeIppResponse(data: Uint8Array): IppResponse {
         ? parseCollection(data, view, cursor)
         : decodeValue(tag, rawValue);
 
-    if (nameLength === 0 && currentGroup.attributes.length > 0) {
-      const prevAttr =
-        currentGroup.attributes[currentGroup.attributes.length - 1];
-      if (Array.isArray(prevAttr.value)) {
-        prevAttr.value.push(value);
-      } else {
-        prevAttr.value = [prevAttr.value, value];
-      }
+    const prevAttr = currentGroup.attributes.at(-1);
+    if (nameLength === 0 && prevAttr) {
+      prevAttr.value = Array.isArray(prevAttr.value)
+        ? [...prevAttr.value, value]
+        : [prevAttr.value, value];
     } else {
       currentGroup.attributes.push({ tag, name, value });
     }
@@ -313,13 +477,21 @@ function isDelimiterTag(tag: number): boolean {
   return tag >= 0x00 && tag <= 0x0f;
 }
 
+/**
+ * Decode a value record. Values whose length does not match what the tag
+ * implies are returned verbatim as bytes rather than throwing - printers do
+ * emit short or empty records, and a malformed attribute should not sink the
+ * whole response.
+ */
 function decodeValue(tag: number, raw: Uint8Array): IppAttributeValue {
   switch (tag) {
     case IppTag.Integer:
     case IppTag.Enum: {
+      if (raw.length < 4) return raw.slice();
       return viewOf(raw).getInt32(0, false);
     }
     case IppTag.Boolean: {
+      if (raw.length < 1) return raw.slice();
       return viewOf(raw).getUint8(0) !== 0;
     }
     case IppTag.RangeOfInteger: {
@@ -328,6 +500,7 @@ function decodeValue(tag: number, raw: Uint8Array): IppAttributeValue {
     }
     case IppTag.Resolution: {
       // RFC 8011 §5.1.16: SIGNED-INTEGER xres, SIGNED-INTEGER yres, SIGNED-BYTE units
+      if (raw.length < 9) return raw.slice();
       const view = viewOf(raw);
       const resolution: IppResolution = {
         x: view.getInt32(0, false),
@@ -335,6 +508,10 @@ function decodeValue(tag: number, raw: Uint8Array): IppAttributeValue {
         units: view.getInt8(8),
       };
       return resolution;
+    }
+    case IppTag.TextWithLanguage:
+    case IppTag.NameWithLanguage: {
+      return decodeTextWithLanguage(raw);
     }
     case IppTag.DateTime: {
       return raw.slice();
@@ -352,6 +529,27 @@ function decodeValue(tag: number, raw: Uint8Array): IppAttributeValue {
       return textDecoder.decode(raw);
     }
   }
+}
+
+/**
+ * RFC 8011 §5.1.2.2: language-length(2) language text-length(2) text.
+ * Falls back to a plain string for records that do not fit that shape.
+ */
+function decodeTextWithLanguage(raw: Uint8Array): IppTextWithLanguage | string {
+  if (raw.length < 4) return textDecoder.decode(raw);
+
+  const view = viewOf(raw);
+  const languageLength = view.getUint16(0, false);
+  if (2 + languageLength + 2 > raw.length) return textDecoder.decode(raw);
+
+  const textLength = view.getUint16(2 + languageLength, false);
+  const textStart = 4 + languageLength;
+  if (textStart + textLength > raw.length) return textDecoder.decode(raw);
+
+  return {
+    language: textDecoder.decode(raw.subarray(2, 2 + languageLength)),
+    value: textDecoder.decode(raw.subarray(textStart, textStart + textLength)),
+  };
 }
 
 /**

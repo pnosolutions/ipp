@@ -5,6 +5,9 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "moduleResolution": "bundler",
+    // Build-tool typings (tsdown/rolldown) assume @types/node and a newer lib
+    // than the packages themselves target.
+    "skipLibCheck": true,
     "composite": true,
     "declaration": true,
     "declarationMap": true,

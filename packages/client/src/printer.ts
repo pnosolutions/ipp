@@ -19,9 +19,12 @@ import {
   buildJobAttributes,
   collection,
   detectMimeType,
-  num,
+  numOrNull,
+  resolution,
+  resolutionArray,
   str,
   strArray,
+  strOrNull,
 } from './utils';
 
 import type {
@@ -30,27 +33,55 @@ import type {
   IppAttributeValue,
   IppResponse,
 } from '@pnosolutions/ipp-core';
+import type { IppAuth } from './client';
 
 export interface PrinterOptions {
+  /** Sent as `requesting-user-name`. Defaults to `'ipp-client'`. */
   username?: string;
+
+  /**
+   * HTTP credentials. Defaults to any credentials embedded in the URI. This is
+   * transport-level auth and is unrelated to `requesting-user-name`.
+   */
+  auth?: IppAuth;
+
+  /** Request timeout in milliseconds. Defaults to 10000. */
+  timeout?: number;
 }
 
 export class Printer {
   readonly client: IppClient;
   readonly username: string;
+  readonly uri: string;
 
-  constructor(
-    readonly uri: string | URL,
-    options: PrinterOptions = {},
-  ) {
-    this.client = new IppClient({ uri: uri.toString() });
+  constructor(uri: string | URL, options: PrinterOptions = {}) {
+    this.uri = uri.toString();
+    this.client = new IppClient({
+      uri: this.uri,
+      auth: options.auth,
+      timeout: options.timeout,
+    });
     this.username = options.username ?? 'ipp-client';
   }
 
   async status(): Promise<
     PrinterStatus & { raw: Record<string, IppAttributeValue> }
   > {
-    const groups = [this.operationGroup()];
+    const groups = [
+      this.operationGroup([
+        {
+          tag: IppTag.NameWithoutLanguage,
+          name: 'requesting-user-name',
+          value: this.username,
+        },
+        {
+          tag: IppTag.Keyword,
+          name: 'requested-attributes',
+          value: 'all',
+        },
+      ]),
+    ];
+
     const response = await this.client.request(
       IppOperation.GetPrinterAttributes,
       groups,
@@ -65,13 +96,17 @@ export class Printer {
       : null;
 
     return {
-      name: str(attrs['printer-name']),
+      name: strOrNull(attrs['printer-name']),
       uri: str(attrs['printer-uri-supported']) || this.uri,
-      state: mapPrinterState(num(attrs['printer-state'])),
+      state: mapPrinterState(numOrNull(attrs['printer-state'])),
       stateReasons: strArray(attrs['printer-state-reasons']),
       supportedFormats: strArray(attrs['document-format-supported']),
       supportedMedia: strArray(attrs['media-supported']),
       readyMedia,
+      supportedResolutions: resolutionArray(
+        attrs['printer-resolution-supported'],
+      ),
+      resolution: resolution(attrs['printer-resolution-default']),
 
       raw: attrs,
     };
@@ -112,13 +147,15 @@ export class Printer {
 
     return {
       id:
-        num(respAttrs['job-id']) || num(getAttribute(response, 'job-id')) || 0,
+        numOrNull(respAttrs['job-id']) ??
+        numOrNull(getAttribute(response, 'job-id')),
       uri:
         str(respAttrs['job-uri']) ||
         str(getAttribute(response, 'job-uri')) ||
         '',
       state: mapJobState(
-        num(respAttrs['job-state']) || num(getAttribute(response, 'job-state')),
+        numOrNull(respAttrs['job-state']) ??
+          numOrNull(getAttribute(response, 'job-state')),
       ),
       name: jobName,
     };
@@ -141,15 +178,19 @@ export class Printer {
   }
 
   protected static ensureSuccessStatusCode(response: IppResponse): void {
-    if (response.statusCode >= 0x0400 && response.statusCode < 0x0600) {
+    // RFC 8011 §4.1.7: 0x0000-0x00ff is successful, 0x0400+ is an error.
+    // Anything above 0x05ff is vendor territory and still not a success.
+    if (response.statusCode >= 0x0400) {
       const msg = str(getAttribute(response, 'status-message'));
       throw new IppOperationError(response.statusCode, msg);
     }
   }
 }
 
-function mapPrinterState(state: number): PrinterState {
+function mapPrinterState(state: number | null): PrinterState {
   switch (state) {
+    case null:
+      return 'unknown';
     case 3:
       return 'idle';
     case 4:
@@ -161,8 +202,10 @@ function mapPrinterState(state: number): PrinterState {
   }
 }
 
-function mapJobState(state: number): JobState {
+function mapJobState(state: number | null): JobState {
   switch (state) {
+    case null:
+      return 'unknown';
     case 3:
       return 'pending';
     case 4:

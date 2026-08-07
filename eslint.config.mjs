@@ -6,12 +6,25 @@ import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
+  { ignores: ['**/dist/**', 'prettier.config.js', 'prettier.config.d.ts'] },
   eslint.configs.recommended,
   ...tseslint.configs.strict,
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        // Test files and build configs live outside the packages' build
+        // tsconfigs, so point the service at the config that does cover them.
+        projectService: {
+          defaultProject: 'tsconfig.test.json',
+          allowDefaultProject: [
+            '*.ts',
+            '*.mjs',
+            'examples/*.ts',
+            'packages/*/*.ts',
+            'packages/*/src/*.test.ts',
+          ],
+        },
+        tsconfigRootDir: import.meta.dirname,
       },
     },
   },
